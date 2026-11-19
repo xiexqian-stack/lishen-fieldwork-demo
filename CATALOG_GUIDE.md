@@ -31,4 +31,4 @@
 
 可以说明：“当前已导入 453 家腾讯地图可检索的琼海相关门店，供查看分布和演示管理流程；其中 6 家的业务状态是演示标注，尚无虚构走访记录。名录和乡镇归属后续继续补齐核实。”
 
-公网展示方案已改为 GitHub Pages，预计地址为 [https://xiexqian-stack.github.io/lishen-fieldwork-demo/](https://xiexqian-stack.github.io/lishen-fieldwork-demo/)。当前尚未确认部署成功，须以 Pages 构建结果和网页实际验证为准。成功发布后，客户可直接打开公开网页，无需登录或访客口令；发布流程与数据范围见 [SHARE_GUIDE.md](SHARE_GUIDE.md)。
+GitHub Pages 已发布并完成浏览器验证：[打开力神门店展示](https://xiexqian-stack.github.io/lishen-fieldwork-demo/)。已确认 453 家门店、6 家演示业务标注、0 条初始走访和腾讯真实 GL 底图正常显示，浏览器控制台无错误。客户可直接打开公开网页，无需 GitHub 登录或访客口令；更新流程与数据范围见 [SHARE_GUIDE.md](SHARE_GUIDE.md)。

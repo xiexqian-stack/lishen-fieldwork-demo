@@ -6,11 +6,11 @@
 
 本次改用现有 GitHub 账号 `xiexqian-stack`，将静态展示文件发布到公开仓库 `lishen-fieldwork-demo`，并通过 GitHub Pages 提供网页访问。公开 Pages 页面供客户直接浏览，不需要客户登录 GitHub，也不设置访客口令。
 
-**当前正在准备部署，尚未确认发布成功。** 预计访问地址为：
+**GitHub Pages 已发布并完成浏览器验证。** 客户访问地址为：
 
 [https://xiexqian-stack.github.io/lishen-fieldwork-demo/](https://xiexqian-stack.github.io/lishen-fieldwork-demo/)
 
-只有完成 Pages 构建并实际打开验证后，才将它作为可用展示链接发给客户。预计地址不代表已上线；实际发布状态以仓库 Pages 设置、构建结果和网页验证为准。
+已验证页面显示 453 家门店、6 家演示业务标注、0 条初始走访，腾讯真实 GL 底图正常加载，浏览器控制台无错误。现在可以把上方链接发给客户；公开访客无需 GitHub 登录或访客口令。下面的步骤用于以后更新和重新部署。
 
 ## 发布与验证步骤
 

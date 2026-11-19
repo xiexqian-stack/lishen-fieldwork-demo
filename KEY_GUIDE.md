@@ -2,7 +2,7 @@
 
 当前已配置“力神图引”，并在 localhost 实测加载成功。发布固定 HTTPS 网址后，仍须把实际站点主机名加入腾讯控制台授权域名，再从公网地址验证。
 
-本次计划使用 GitHub Pages，预计网址为 `https://xiexqian-stack.github.io/lishen-fieldwork-demo/`；对应授权主机名是 **`xiexqian-stack.github.io`**，不包含网址路径 `/lishen-fieldwork-demo/`。当前尚未确认该站点部署成功，完成发布后还需从实际公网地址验证地图。
+本次 GitHub Pages 已发布并通过浏览器验证，网址为 `https://xiexqian-stack.github.io/lishen-fieldwork-demo/`，腾讯真实 GL 地图正常加载。对应授权主机名是 **`xiexqian-stack.github.io`**，不包含网址路径 `/lishen-fieldwork-demo/`。后续更换域名时，仍须更新授权并重新验证。
 
 本演示版没有地图 Key 也能操作门店与走访流程。需要真实道路底图时，再按以下步骤申请腾讯位置服务 Key。控制台名称和入口可能调整，实际界面及服务条款以腾讯官方当前页面为准。
 
