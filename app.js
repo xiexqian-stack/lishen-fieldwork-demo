@@ -4,6 +4,8 @@ import { getDemoAnnotationPreview, clearDemoAnnotations, applyDemoAnnotations, m
 import { migrateCatalog } from './catalog-migration.js';
 import { mobileNav, mobileStoreCards, mobileSelectedCard } from './mobile-ui.js';
 import { APP_CONFIG } from './config.js';
+import { getDistrictSummaries } from './districts.js';
+import { normalizeStorePhotos, validateStorePhotos, compressStorePhoto, PHOTO_GROUPS, STORE_PHOTO_LIMITS, assertDatasetStorageBudget } from './store-photos.js';
 
 const paths = {
   grid:'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z',
@@ -53,7 +55,8 @@ function readData() {
   return seed;
 }
 let db = readData();
-const state = { page:validPage(location.hash.slice(1)), role:'admin', repId:REPS[0].id, town:'', status:'', grade:'', type:'', query:'', repFilter:'', visitDate:'', pageNumber:1, view:matchMedia('(max-width:760px)').matches?'map':'list', selected:null };
+const initialRoute=parseRoute();
+const state = { page:initialRoute.page, role:'admin', repId:REPS[0].id, town:initialRoute.town, status:'', grade:'', type:'', query:'', repFilter:'', visitDate:'', pageNumber:1, view:initialRoute.town?'list':matchMedia('(max-width:760px)').matches?'map':'list', selected:null };
 let mainMap = null, formMap = null, activeModal = null, returnFocus = null, modalToken = 0, toastTimer;
 const pageMeta = {
   overview:{title:'市场总览',en:'MARKET OVERVIEW',desc:'每一家门店，都值得被看见。',icon:'grid'},
@@ -63,6 +66,8 @@ const pageMeta = {
   team:{title:'业务团队',en:'FIELD TEAM',desc:'分工清晰，让终端维护更有节奏。',icon:'users'},
   settings:{title:'系统设置',en:'WORKSPACE SETTINGS',desc:'配置真实地图，准备下一步上线。',icon:'settings'}
 };
+function parseRoute(){const [page,query='']=location.hash.slice(1).split('?');const town=new URLSearchParams(query).get('town')||'';return {page:validPage(page),town:TOWN_OPTIONS.includes(town)?town:''};}
+function openTown(town){if(!TOWN_OPTIONS.includes(town))return;Object.assign(state,{page:'outlets',town,status:'',grade:'',type:'',query:'',repFilter:'',visitDate:'',pageNumber:1,view:'list',selected:null});location.hash='outlets?town='+encodeURIComponent(town);render();window.scrollTo({top:0});}
 function validPage(page) { return ['overview','outlets','visits','analytics','team','settings'].includes(page) ? page : 'overview'; }
 const rep = id => REPS.find(r=>r.id===id) || {id:'',name:'未分配',initials:'待'};
 const mobileHelpers={esc,icon,statusBadge,gradeBadge,formatDate,rep};
@@ -92,8 +97,8 @@ function notify(message,error=false) { clearTimeout(toastTimer); $('#toast-root'
 function commit(mutate) {
   const next=structuredClone(db);
   mutate(next);
-  try { localStorage.setItem(STORAGE_KEY,JSON.stringify(next)); }
-  catch { notify('保存失败：浏览器存储空间不足或已禁用。请导出备份，减少照片后重试。',true); return false; }
+  try { localStorage.setItem(STORAGE_KEY,assertDatasetStorageBudget(next)); }
+  catch(error) { notify(error.message?.includes('照片')?error.message:'保存失败：浏览器存储空间不足或已禁用。请导出备份，减少照片后重试。',true); return false; }
   db=next;return true;
 }
 function navigate(page,reset=true) {
@@ -105,15 +110,15 @@ function render() {
   mainMap?.destroy();mainMap=null;
   const meta=pageMeta[state.page];
   $('#app').innerHTML=`<div class="app-shell"><aside class="sidebar" aria-label="主导航">
-    <a class="brand" href="#overview" data-page="overview" aria-label="力神终端管理首页"><span class="brand-mark">力</span><span class="brand-name">力神<span style="font-size:10px;letter-spacing:0;margin-left:3px;font-weight:400">®</span><small>LISHEN COFFEE</small></span></a>
+    <a class="brand" href="#overview" data-page="overview" aria-label="力神终端管理首页"><span class="brand-logo">LiSUN<sup>®</sup></span><span class="brand-name">力神咖啡<small>好咖啡，力神造！</small></span></a>
     <div class="nav-group-label">工作空间 / WORKSPACE</div><nav class="nav">${['overview','outlets','visits','analytics'].map(p=>navItem(p)).join('')}</nav>
     <div class="nav-divider"></div><div class="nav-group-label">管理 / MANAGEMENT</div><nav class="nav">${navItem('team')}${navItem('settings')}</nav>
     <div class="sidebar-footer"><div class="pilot-card"><div class="pilot-title"><i class="live-dot"></i>琼海市 · 试点市场</div><p>连接每一个终端<br>让好咖啡，走进日常</p><button data-page="settings">地图接入指引 ${icon('arrow')}</button></div><div class="version"><span>FIELDWORK v0.1</span><span>演示版</span></div></div>
     </aside><main class="main"><header class="topbar"><button class="mobile-toggle" data-action="mobile-menu" aria-label="展开导航">${icon('menu')}</button><div class="breadcrumb"><span>终端门店管理</span>${icon('chevron')}<b>${meta.title}</b></div><div class="top-search">${icon('search')}<input id="global-search" aria-label="搜索门店" placeholder="搜索门店名称、地址…"><kbd>/</kbd></div><button class="notification" data-action="followups" aria-label="查看待跟进门店">${icon('bell')}</button><span class="top-divider"></span><button class="user-switch" data-action="role" aria-label="切换演示身份"><span class="avatar">${state.role==='admin'?'管':rep(state.repId).initials}</span><span class="user-label"><strong>${state.role==='admin'?'市场管理员':rep(state.repId).name}</strong><small>${state.role==='admin'?'管理员':'业务员'} · 演示身份</small></span>${icon('down')}</button></header>
-    <div class="page"><div class="page-heading"><div><div class="eyebrow">${meta.en}</div><h1>${meta.title}</h1><p class="page-description">${meta.desc}</p></div><div class="actions">${pageActions()}</div></div><div id="page-content"></div><footer class="page-footer"><span>${icon('shield')}力神咖啡 · 终端管理工作空间</span><span>${db.stores.some(s=>s.annotationIsDemo)?'真实名录 · 含演示标注':'真实名录'} · 仅保存在当前浏览器</span></footer></div></main>${mobileNav(state.page,icon)}</div>`;
+    <div class="page page-${state.page}"><div class="page-heading"><div><div class="eyebrow">${meta.en}</div><h1>${state.page==='outlets'&&state.town?esc(state.town)+'门店':meta.title}</h1><p class="page-description">${meta.desc}</p></div><div class="actions">${pageActions()}</div></div><div id="page-content"></div><footer class="page-footer"><span>${icon('shield')}力神咖啡 · 终端管理工作空间</span><span>${db.stores.some(s=>s.annotationIsDemo)?'真实名录 · 含演示标注':'真实名录'} · 仅保存在当前浏览器</span></footer></div></main>${mobileNav(state.page,icon)}</div>`;
   renderContent();
 }
-function navItem(page) { return `<button class="nav-item ${state.page===page?'active':''}" data-page="${page}" ${state.page===page?'aria-current="page"':''}>${icon(pageMeta[page].icon)}${pageMeta[page].title}${page==='outlets'?`<span class="nav-num">${baseStores().length}</span>`:''}</button>`; }
+function navItem(page) { return `<button class="nav-item ${state.page===page?'active':''}" data-page="${page}" ${state.page===page?'aria-current="page"':''}>${icon(pageMeta[page].icon)}${page==='overview'?'首页':pageMeta[page].title}${page==='outlets'?`<span class="nav-num">${baseStores().length}</span>`:''}</button>`; }
 function pageActions() {
   if(state.page==='settings') return `<span class="badge demo">本地演示环境</span>`;
   if(state.page==='team')return `<button class="btn secondary" data-action="export">${icon('download')}导出门店</button>`;
@@ -138,9 +143,9 @@ async function activateMap(map,key) {
   catch(error){if(map===mainMap){$('#map-mode-label')&&($('#map-mode-label').textContent='示意底图 · Key 接入未成功');}}
 }
 function statsGrid() {
- const stores=baseStores(),visits=visibleVisits(),today=visits.filter(v=>localDay(v.visitedAt)===localDay()).length;
+ const stores=baseStores(),visits=visibleVisits().filter(v=>!v.isDemo),today=visits.filter(v=>localDay(v.visitedAt)===localDay()).length;
  const reviewed=stores.filter(s=>!s.annotationIsDemo&&s.status!=='unvisited'),stocked=reviewed.filter(s=>['green','yellow'].includes(s.status));
- const unknown=stores.filter(s=>s.status==='unvisited').length,demo=stores.filter(s=>s.annotationIsDemo).length;
+ const visitedStoreIds=new Set(visits.map(v=>v.storeId)),unknown=stores.filter(s=>!visitedStoreIds.has(s.id)).length,demo=stores.filter(s=>s.annotationIsDemo).length;
  const cards=[{title:'真实门店名录',value:stores.length,unit:'家',icon:'store',foot:'腾讯地点检索 · 琼海行政区',featured:true},
  {title:'今日现场走访',value:today,unit:'次',icon:'clipboard',foot:`累计 ${visits.length} 条现场记录`},
  {title:'已核实铺货率',value:reviewed.length?Math.round(stocked.length/reviewed.length*100):'—',unit:reviewed.length?'%':'',icon:'chart',foot:reviewed.length?`仅统计 ${reviewed.length} 家人工标记门店`:'暂无已核实业务资料'},
@@ -153,10 +158,13 @@ function mapToolbar() {
 }
 function mapFooter() {return `<div class="map-footer"><div class="grade-legend"><span class="unvisited"><b>○</b>待走访 / 分级</span><span><b>★</b>A 类门店</span><span><b>▲</b>B 类门店</span><span><b>●</b>C 类门店</span></div><span class="map-mode">${icon('map')}<span id="map-mode-label">琼海乡镇示意图</span><a href="#settings" data-page="settings">接入真实地图 ↗</a></span></div>`;}
 function mapControls() {return `<div class="map-controls"><button data-action="map-gps" aria-label="定位我的当前位置" title="我的位置">${icon('navigation')}</button><button data-action="map-fit" aria-label="显示全部筛选门店" title="显示全部门店">${icon('location')}</button><button data-action="map-zoom-in" aria-label="放大地图" title="放大">${icon('plus')}</button><button data-action="map-zoom-out" aria-label="缩小地图" title="缩小">${icon('minus')}</button></div>`;}
+function homeHero(){return `<section class="hero-banner"><div class="hero-copy"><p class="hero-kicker">力神咖啡 · 琼海终端走访工作台</p><h1>好咖啡，<br>走进每一家门店。</h1><p class="hero-subtitle">按区域看门店 · 到店拍照 · 记录每一次跟进</p><div class="hero-actions"><button class="btn primary" data-page="outlets">${icon('pin')}查看全部门店 ${icon('arrow')}</button><button class="btn secondary" data-action="new-visit">${icon('clipboard')}登记走访</button></div></div><div class="hero-products" aria-label="力神咖啡产品展示"><img src="assets/bottle.webp" alt="力神醇品咖啡瓶装"><img src="assets/charcoal.webp" alt="力神炭烧咖啡"><img src="assets/coconut.webp" alt="力神椰奶咖啡"><img src="assets/blue-pouch.webp" alt="力神醇香咖啡"></div></section><div class="hero-strip"><span>每一家终端，都是新的好开始。</span><span>选择区域 → 查看门店 → 拍照与走访登记</span></div>`;}
+function districtBoard(){const districts=getDistrictSummaries(baseStores(),visibleVisits());return `<section class="panel district-board"><div class="section-heading"><div><h2>市区与乡镇 <span class="badge">12 个乡镇</span></h2><p>按区域开展走访，点击卡片进入该区域门店档案。</p></div><button class="btn text" data-page="outlets">全部门店 ${icon('arrow')}</button></div><div class="district-grid">${districts.map(d=>`<article data-action="open-town" data-town="${esc(d.town)}" class="district-card ${d.town==='乡镇待核实'?'pending-district':''}"><div class="district-card-head"><span class="district-icon">${icon(d.town==='乡镇待核实'?'info':'store')}</span><span class="district-label">${d.town==='嘉积镇'?'市区及周边':d.town==='乡镇待核实'?'归属待核实':'乡镇网点'}</span></div><button class="district-name" data-action="open-town" data-town="${esc(d.town)}">${esc(d.town)}</button><div class="district-count"><strong>${d.total}</strong><span>家门店</span></div><div class="district-metrics"><span>待核实 <b>${d.unvisited}</b></span><span>已走访 <b>${d.visited}</b></span><span>有照片 <b>${d.withPhotos}</b></span></div><div class="district-progress"><span style="width:${d.total?Math.round(d.verified/d.total*100):0}%"></span></div><div class="district-card-footer"><small>${d.demo?'含 '+d.demo+' 家演示标记':d.town==='乡镇待核实'?'地址未明示乡镇，待现场核实':d.total?'已核实 '+d.verified+' 家业务资料':'名录待继续补齐'}</small><button data-action="open-town" data-town="${esc(d.town)}" aria-label="进入${esc(d.town)}门店">进入区域 ${icon('arrow')}</button></div></article>`).join('')}</div><p class="district-note">当前为腾讯名录检索快照，数量不代表区域已完整普查；演示标记不计入人工核实。</p></section>`;}
+function districtContext(){if(!state.town)return '';const d=getDistrictSummaries(baseStores(),visibleVisits()).find(x=>x.town===state.town);if(!d)return '';return `<section class="district-context"><div><button class="btn text" data-page="overview">${icon('grid')}返回区域总览</button><h2>${esc(d.town)} <span class="badge">区域门店档案</span></h2><p>门店 ${d.total} 家 · 待核实 ${d.unvisited} 家 · 已走访 ${d.visited} 家 · 有照片 ${d.withPhotos} 家</p></div><button class="btn secondary" data-action="all-outlets">查看全部门店</button></section>`;}
 function overviewPage() {
   const follow=baseStores().filter(s=>s.status==='unvisited'||s.status==='yellow'||s.status==='red').sort((a,b)=>(a.status==='yellow'?-1:1)-(b.status==='yellow'?-1:1)||daysSince(b.lastVisitAt)-daysSince(a.lastVisitAt));
   const recent=visibleVisits().sort((a,b)=>new Date(b.visitedAt)-new Date(a.visitedAt)).slice(0,4);
-  return `${catalogNotice()}${statsGrid()}<div class="map-layout"><section class="panel"><div class="panel-header"><div><div class="panel-title">终端网点分布 <span class="badge lime">琼海试点</span></div></div><div class="map-title-location">${icon('pin')}海南省 / 琼海市</div></div>${mapToolbar()}<div class="map-stage"><div id="main-map"></div><div class="map-empty-banner" id="map-empty" hidden>当前筛选下没有门店，请切换状态或乡镇</div>${mapControls()}</div>${mapFooter()}</section><section class="panel followup-panel"><div class="panel-header"><span class="panel-title">待跟进门店</span><span class="count-label">${follow.length} 家</span></div><div class="follow-list">${follow.slice(0,4).map(s=>`<button class="follow-item" data-action="detail" data-id="${s.id}"><div class="follow-top"><span class="follow-name">${esc(s.name)}</span>${icon('chevron')}</div><p>${esc(s.town)}<span>·</span>${rep(s.repId).name}<span>·</span>${GRADE_META[s.grade]?.label||'待分级'}</p><span class="follow-tag ${s.status}">${s.status==='unvisited'?'待首次实地核实':s.annotationIsDemo?'演示标注 · 未实地核实':s.status==='red'?'暂无产品，待拓展':'SKU / 陈列待提升'}</span></button>`).join('')||'<div class="empty">所有门店均已达标</div>'}</div><div class="follow-footer"><button data-action="followups">查看全部待跟进 ${icon('arrow')}</button></div></section></div>
+  return `${homeHero()}${statsGrid()}${districtBoard()}${catalogNotice()}<div class="map-layout"><section class="panel"><div class="panel-header"><div><div class="panel-title">终端网点分布 <span class="badge lime">琼海试点</span></div></div><div class="map-title-location">${icon('pin')}海南省 / 琼海市</div></div>${mapToolbar()}<div class="map-stage"><div id="main-map"></div><div class="map-empty-banner" id="map-empty" hidden>当前筛选下没有门店，请切换状态或乡镇</div>${mapControls()}</div>${mapFooter()}</section><section class="panel followup-panel"><div class="panel-header"><span class="panel-title">待跟进门店</span><span class="count-label">${follow.length} 家</span></div><div class="follow-list">${follow.slice(0,4).map(s=>`<button class="follow-item" data-action="detail" data-id="${s.id}"><div class="follow-top"><span class="follow-name">${esc(s.name)}</span>${icon('chevron')}</div><p>${esc(s.town)}<span>·</span>${rep(s.repId).name}<span>·</span>${GRADE_META[s.grade]?.label||'待分级'}</p><span class="follow-tag ${s.status}">${s.status==='unvisited'?'待首次实地核实':s.annotationIsDemo?'演示标注 · 未实地核实':s.status==='red'?'暂无产品，待拓展':'SKU / 陈列待提升'}</span></button>`).join('')||'<div class="empty">所有门店均已达标</div>'}</div><div class="follow-footer"><button data-action="followups">查看全部待跟进 ${icon('arrow')}</button></div></section></div>
   <section class="panel"><div class="panel-header"><div class="panel-title">最近走访 <span class="badge">${visibleVisits().length} 条记录</span></div><button class="btn text" data-page="visits">全部记录 ${icon('arrow')}</button></div>${recent.length?visitTable(recent,true):emptyState('还没有走访记录','新增一条记录，开始维护你的终端门店。','登记走访','new-visit')}</section>`;
 }
 function filterBar(kind='stores') {
@@ -166,7 +174,7 @@ function filterBar(kind='stores') {
 function outletsPage() {
   const stores=filteredStores(),count=stores.length,start=(state.pageNumber-1)*8;
   if(state.view==='map'&&!stores.some(s=>s.id===state.selected))state.selected=stores[0]?.id||null;
-  return `${catalogNotice()}<section class="panel"><div class="panel-header"><div class="panel-title">终端门店档案 <span class="badge">${count} 家门店</span></div><div class="view-toggle" role="group" aria-label="显示方式"><button class="${state.view==='list'?'active':''}" data-view="list">${icon('list')}列表</button><button class="${state.view==='map'?'active':''}" data-view="map">${icon('map')}地图</button></div></div>${filterBar()}${state.view==='list'?`${stores.length?storeTable(stores.slice(start,start+8)):emptyState('没有找到门店','试试其他筛选条件，或登记一家新门店。','新增门店','new-store')}${pagination(count,8)}`:`<div class="map-layout outlets-map-layout"><div><div class="outlet-map"><div id="main-map"></div><div class="map-empty-banner" id="map-empty" hidden>当前筛选下没有门店</div>${mapControls()}</div>${mapFooter()}</div><div id="selected-store">${selectedContent()}</div></div>`}</section>`;
+  return `${districtContext()}${catalogNotice()}<section class="panel"><div class="panel-header"><div class="panel-title">终端门店档案 <span class="badge">${count} 家门店</span></div><div class="view-toggle" role="group" aria-label="显示方式"><button class="${state.view==='list'?'active':''}" data-view="list">${icon('list')}列表</button><button class="${state.view==='map'?'active':''}" data-view="map">${icon('map')}地图</button></div></div>${filterBar()}${state.view==='list'?`${stores.length?storeTable(stores.slice(start,start+8)):emptyState('没有找到门店','试试其他筛选条件，或登记一家新门店。','新增门店','new-store')}${pagination(count,8)}`:`<div class="map-layout outlets-map-layout"><div><div class="outlet-map"><div id="main-map"></div><div class="map-empty-banner" id="map-empty" hidden>当前筛选下没有门店</div>${mapControls()}</div>${mapFooter()}</div><div id="selected-store">${selectedContent()}</div></div>`}</section>`;
 }
 function storeTable(stores) {
   return `${mobileStoreCards(stores,mobileHelpers)}<div class="table-scroll desktop-store-table"><table><thead><tr><th>门店名称 / 地址</th><th>乡镇 / 类型</th><th>铺货状态</th><th>门店级别</th><th>负责人</th><th>最近走访</th><th>操作</th></tr></thead><tbody>${stores.map(s=>`<tr><td><button class="store-cell" data-action="detail" data-id="${s.id}" style="text-align:left;padding:0"><span class="store-icon">${icon(s.type==='老爸茶店'?'coffee':'store')}</span><span><strong>${esc(s.name)}${s.annotationIsDemo?' <span class="badge demo">演示标注</span>':''}</strong><small>${esc(s.address)}</small></span></button></td><td>${esc(s.town)}<br><small class="text-muted" style="font-size:9px;display:block;margin-top:5px">${s.type}</small></td><td>${statusBadge(s.status)}</td><td>${gradeBadge(s.grade)}</td><td>${person(s.repId)}</td><td>${formatDate(s.lastVisitAt)}</td><td><button class="row-action" data-action="quick-tag" data-id="${s.id}">改标记</button><button class="row-action" data-action="visit" data-id="${s.id}">走访登记</button><button class="row-action muted" data-action="edit-store" data-id="${s.id}">编辑</button></td></tr>`).join('')}</tbody></table></div>`;
@@ -237,11 +245,57 @@ function mapGPS(button){
  const currentMap=mainMap;button.disabled=true;
  navigator.geolocation.getCurrentPosition(pos=>{button.disabled=false;if(!currentMap||currentMap!==mainMap)return;const [lng,lat]=wgs84ToGcj02(pos.coords.longitude,pos.coords.latitude);currentMap.locate(lng,lat,{accuracy:pos.coords.accuracy});notify(`已定位当前位置，估算精度约 ${Math.round(pos.coords.accuracy)} 米`);},error=>{button.disabled=false;notify(error.code===1?'请在手机浏览器允许本网站访问位置后重试':'暂时无法定位，请检查手机定位开关和 HTTPS 访问地址',true);},{enableHighAccuracy:true,timeout:15000,maximumAge:0});
 }
+function storePhotoGroup(group,photos,editable=false) {
+  const items=photos[group]||[];
+  return `<section class="photo-manager" data-photo-group="${group}"><div class="photo-manager-heading"><h3>${PHOTO_GROUPS[group]} <span class="badge">${items.length} / ${STORE_PHOTO_LIMITS.maxPerGroup}</span></h3>${editable?`<div class="store-photo-tools"><label class="btn secondary" for="photo-library-${group}">${icon('plus')}选照片<input class="photo-file-input" id="photo-library-${group}" type="file" accept="image/jpeg,image/png,image/webp" multiple data-store-photo-input="${group}"></label><label class="btn primary" for="photo-camera-${group}">${icon('camera')}拍照<input class="photo-file-input" id="photo-camera-${group}" type="file" accept="image/*" capture="environment" data-store-photo-input="${group}"></label></div>`:''}</div>${items.length?`<div class="store-photo-grid">${items.map((p,i)=>`<figure class="store-photo-item"><button type="button" data-action="view-photo" data-photo="${esc(p.src)}" data-photo-title="${PHOTO_GROUPS[group]} ${i+1}" aria-label="查看${PHOTO_GROUPS[group]} ${i+1}"><img src="${esc(p.src)}" alt="${PHOTO_GROUPS[group]} ${i+1}" loading="lazy"></button>${editable?`<figcaption class="store-photo-tools"><label class="btn secondary small" for="photo-replace-${p.id}">更换<input class="photo-file-input" id="photo-replace-${p.id}" type="file" accept="image/jpeg,image/png,image/webp" data-store-photo-input="${group}" data-replace-id="${p.id}"></label><button type="button" class="btn text small" data-action="remove-store-photo" data-group="${group}" data-photo-id="${p.id}" aria-label="移除${PHOTO_GROUPS[group]} ${i+1}">移除</button></figcaption>`:''}</figure>`).join('')}</div>`:`<div class="store-photo-empty">${icon('camera')}<span>暂无${PHOTO_GROUPS[group]}${editable?'，可拍照或从相册添加':''}</span></div>`}</section>`;
+}
+function storePhotosEditor(photos){return `<div id="store-photos-editor">${Object.keys(PHOTO_GROUPS).map(group=>storePhotoGroup(group,photos,true)).join('')}<p class="source-note">两组各最多 6 张，自动压缩；点击保存后保留在当前浏览器。取消不会改变已保存照片。</p><p id="store-photo-processing" class="source-note" role="status"></p></div>`;}
+function refreshStorePhotoEditor(){
+  if(!activeModal?.storePhotos||!$('#store-photos-editor'))return;
+  $('#store-photos-editor').outerHTML=storePhotosEditor(activeModal.storePhotos);
+  $('#store-photo-processing').textContent=activeModal.processingPhotos?'正在压缩照片，请稍候…':'';
+  document.querySelectorAll('[data-store-photo-input], [data-action="remove-store-photo"],#store-form button[type="submit"],#store-photos-form button[type="submit"]').forEach(el=>el.disabled=!!activeModal.processingPhotos);
+}
+async function processStorePhotos(files,group,replaceId){
+  const modal=activeModal,token=modalToken;
+  if(!modal?.storePhotos||modal.processingPhotos||!Object.hasOwn(PHOTO_GROUPS,group)||!files.length)return;
+  if((replaceId?modal.storePhotos[group].length:modal.storePhotos[group].length+files.length)>STORE_PHOTO_LIMITS.maxPerGroup){notify(PHOTO_GROUPS[group]+'最多保存 6 张，请先移除旧照片。',true);refreshStorePhotoEditor();return;}
+  modal.processingPhotos=true;refreshStorePhotoEditor();
+  try{
+    const added=[];for(const file of (replaceId?files.slice(0,1):files))added.push(await compressStorePhoto(file));
+    if(token!==modalToken||activeModal!==modal)return;
+    const photos=structuredClone(modal.storePhotos);
+    if(replaceId){const i=photos[group].findIndex(p=>p.id===replaceId);if(i<0)throw Error('照片已变更，请重新选择。');photos[group][i]=added[0];}else photos[group].push(...added);
+    validateStorePhotos({photos});modal.storePhotos=photos;
+  }catch(error){if(token===modalToken)notify(error.message||'照片读取失败，请重新选择。',true);}
+  finally{if(token===modalToken&&activeModal===modal){modal.processingPhotos=false;refreshStorePhotoEditor();}}
+}
+function openPhotoManager(id){
+  const s=storeById(id);if(!canEdit(s))return;
+  const photos=normalizeStorePhotos(s);
+  openDrawer('门店照片',s.name+' · '+s.town,`<div id="form-error"></div>${storePhotosEditor(photos)}`,`<button type="button" class="btn secondary" data-action="detail" data-id="${s.id}">返回档案</button><div class="actions"><button type="button" class="btn secondary" data-action="close-modal">取消</button><button type="submit" class="btn primary">${icon('check')}保存照片</button></div>`,'store-photos-form');
+  activeModal={type:'store-photos',id,storePhotos:photos,processingPhotos:false};
+}
+function saveStorePhotos(){
+  const modal=activeModal,s=storeById(modal?.id);if(!canEdit(s))return;
+  if(modal.processingPhotos){formError('照片正在处理，请稍后保存。');return;}
+  try{validateStorePhotos({photos:modal.storePhotos});}catch(error){formError(error.message);return;}
+  if(commit(next=>Object.assign(next.stores.find(item=>item.id===s.id),{photos:structuredClone(modal.storePhotos),photosUpdatedAt:new Date().toISOString()}))){closeModal();render();showDetail(s.id);notify('门头与陈列照片已保存');}
+}
+let photoViewerFocus=null;
+function closePhotoViewer(){const viewer=$('.photo-lightbox');if(!viewer)return;viewer.remove();if(photoViewerFocus?.isConnected)photoViewerFocus.focus();photoViewerFocus=null;}
+function openPhotoViewer(src,title='现场照片'){
+  if(!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(src||''))return;
+  closePhotoViewer();photoViewerFocus=document.activeElement;
+  const viewer=document.createElement('section');viewer.className='photo-lightbox';viewer.setAttribute('role','dialog');viewer.setAttribute('aria-modal','true');viewer.setAttribute('aria-label',title);
+  viewer.innerHTML=`<button type="button" class="icon-button" data-action="close-photo-viewer" aria-label="关闭照片预览">${icon('close')}</button><figure><img src="${esc(src)}" alt="${esc(title)}"><figcaption>${esc(title)}</figcaption></figure>`;
+  $('#overlay-root').append(viewer);viewer.querySelector('button').focus();
+}
 function storeForm(id) {
   const existing=storeById(id);if(id&&!canEdit(existing)){notify('当前身份无权编辑此门店',true);return;}
   const s=existing||{name:'',town:state.town||'嘉积镇',type:'茶饮店',address:'',contact:'',phone:'',repId:state.role==='rep'?state.repId:'',status:'unvisited',grade:'ungraded',lng:'',lat:'',display:'未登记',skuCount:0,facings:0,notes:''};
-  openDrawer(id?'编辑门店':'登记一家新门店','完善终端档案，标记门店位置。带 * 的项目为必填。',`<div id="form-error"></div><div class="form-grid">${field('门店名称','name',s.name,'text','required maxlength="60" placeholder="例如：万泉里老爸茶"')}${selectField('门店类型','type',STORE_TYPES,s.type)}${selectField('所属乡镇','town',TOWN_OPTIONS,s.town)}${selectField('门店级别','grade',['ungraded','A','B','C'].map(g=>({value:g,label:`${GRADE_META[g].symbol} ${GRADE_META[g].label}`})),s.grade)}<div class="field full"><label for="f-address">详细地址 <span class="required">*</span></label><input id="f-address" name="address" class="field-input" required maxlength="180" placeholder="填写街道、门牌号或地标" value="${esc(s.address)}"></div>${field('联系人','contact',s.contact,'text','maxlength="30"')}${field('联系电话','phone',s.phone,'tel','maxlength="25" placeholder="选填"')}${state.role==='admin'?selectField('负责业务员','repId',[{value:'',label:'未分配'},...REPS.map(r=>({value:r.id,label:r.name}))],s.repId):`<input type="hidden" name="repId" value="${state.repId}">`}${statusChoices(s.status)}<div class="form-divider">${icon('pin')}门店位置 <button class="btn text" type="button" data-action="store-gps" style="margin-left:auto">${icon('location')}获取当前位置</button></div>${field('经度（GCJ-02）','lng',s.lng,'number','required min="73" max="135" step="any" placeholder="110.469200"')}${field('纬度（GCJ-02）','lat',s.lat,'number','required min="3" max="54" step="any" placeholder="19.246900"')}<div class="field full"><div class="location-result" id="store-location-result">${id?`当前来源：${esc(s.locationSource||'演示坐标 / 待核实')}`:'可获取 GPS、填写 GCJ-02 坐标，或在下方示意图点击选点。示意选点仅供演示。'}</div><div class="mini-map"><div id="form-map"></div></div><small>GPS 获取后已转为 GCJ-02；请在门店现场核实。示意底图无法用于验证真实地址。</small></div><div class="form-divider">${icon('store')}当前陈列档案</div>${field('产品 SKU 数量','skuCount',s.skuCount,'number','required min="0" max="100" step="1"')}${field('陈列排面','facings',s.facings,'number','required min="0" max="999" step="1"')}${selectField('陈列位置','display',['未登记','未陈列','货架陈列','端架陈列','收银台陈列'],s.display)}<div class="field full"><label for="f-notes">门店备注</label><textarea class="field-input" id="f-notes" name="notes" maxlength="600" placeholder="记录铺货意向、补货需求、下次跟进事项…">${esc(s.notes)}</textarea></div></div>`,`${id&&state.role==='admin'?`<button class="btn danger small" type="button" data-action="delete-store" data-id="${id}">删除门店</button>`:'<span class="source-note">本地保存 · 演示环境</span>'}<div class="actions"><button class="btn secondary" type="button" data-action="close-modal">取消</button><button class="btn primary" type="submit">${icon('check')}保存门店</button></div>`,'store-form');
-  activeModal={type:'store',id,locationSource:s.locationSource|| (id?'演示坐标 / 待核实':'手动填写 GCJ-02'),accuracy:s.accuracy||null,gpsCoords:null};
+  openDrawer(id?'编辑门店':'登记一家新门店','完善终端档案，标记门店位置。带 * 的项目为必填。',`<div id="form-error"></div><div class="form-grid">${field('门店名称','name',s.name,'text','required maxlength="60" placeholder="例如：万泉里老爸茶"')}${selectField('门店类型','type',STORE_TYPES,s.type)}${selectField('所属乡镇','town',TOWN_OPTIONS,s.town)}${selectField('门店级别','grade',['ungraded','A','B','C'].map(g=>({value:g,label:`${GRADE_META[g].symbol} ${GRADE_META[g].label}`})),s.grade)}<div class="field full"><label for="f-address">详细地址 <span class="required">*</span></label><input id="f-address" name="address" class="field-input" required maxlength="180" placeholder="填写街道、门牌号或地标" value="${esc(s.address)}"></div>${field('联系人','contact',s.contact,'text','maxlength="30"')}${field('联系电话','phone',s.phone,'tel','maxlength="25" placeholder="选填"')}${state.role==='admin'?selectField('负责业务员','repId',[{value:'',label:'未分配'},...REPS.map(r=>({value:r.id,label:r.name}))],s.repId):`<input type="hidden" name="repId" value="${state.repId}">`}${statusChoices(s.status)}<div class="form-divider">${icon('pin')}门店位置 <button class="btn text" type="button" data-action="store-gps" style="margin-left:auto">${icon('location')}获取当前位置</button></div>${field('经度（GCJ-02）','lng',s.lng,'number','required min="73" max="135" step="any" placeholder="110.469200"')}${field('纬度（GCJ-02）','lat',s.lat,'number','required min="3" max="54" step="any" placeholder="19.246900"')}<div class="field full"><div class="location-result" id="store-location-result">${id?`当前来源：${esc(s.locationSource||'演示坐标 / 待核实')}`:'可获取 GPS、填写 GCJ-02 坐标，或在下方示意图点击选点。示意选点仅供演示。'}</div><div class="mini-map"><div id="form-map"></div></div><small>GPS 获取后已转为 GCJ-02；请在门店现场核实。示意底图无法用于验证真实地址。</small></div><div class="form-divider">${icon('store')}当前陈列档案</div>${field('产品 SKU 数量','skuCount',s.skuCount,'number','required min="0" max="100" step="1"')}${field('陈列排面','facings',s.facings,'number','required min="0" max="999" step="1"')}${selectField('陈列位置','display',['未登记','未陈列','货架陈列','端架陈列','收银台陈列'],s.display)}<div class="field full"><label for="f-notes">门店备注</label><textarea class="field-input" id="f-notes" name="notes" maxlength="600" placeholder="记录铺货意向、补货需求、下次跟进事项…">${esc(s.notes)}</textarea></div><div class="field full">${storePhotosEditor(normalizeStorePhotos(s))}</div></div>`,`${id&&state.role==='admin'?`<button class="btn danger small" type="button" data-action="delete-store" data-id="${id}">删除门店</button>`:'<span class="source-note">本地保存 · 演示环境</span>'}<div class="actions"><button class="btn secondary" type="button" data-action="close-modal">取消</button><button class="btn primary" type="submit">${icon('check')}保存门店</button></div>`,'store-form');
+  activeModal={type:'store',id,storePhotos:normalizeStorePhotos(s),processingPhotos:false,locationSource:s.locationSource|| (id?'演示坐标 / 待核实':'手动填写 GCJ-02'),accuracy:s.accuracy||null,gpsCoords:null};
   formMap=new StoreMap($('#form-map'),{onCoordinate:pos=>{if(activeModal?.type!=='store')return;$('#f-lng').value=pos.lng.toFixed(6);$('#f-lat').value=pos.lat.toFixed(6);activeModal.locationSource=pos.source==='tencent'?'腾讯地图选点（GCJ-02）':'示意图选点（待现场核实）';activeModal.accuracy=null;activeModal.gpsCoords=null;$('#store-location-result').textContent=`${activeModal.locationSource}：${pos.lng.toFixed(6)}, ${pos.lat.toFixed(6)}`;formMap.setStores([{...s,id:'draft',lng:pos.lng,lat:pos.lat,name:$('#f-name').value||'新门店'}]);}});
   if(id){formMap.setStores([s]);formMap.setCenter(s.lng,s.lat);}if(db.settings.tencentKey)activateMap(formMap,db.settings.tencentKey);
 }
@@ -254,7 +308,7 @@ function visitForm(storeId) {
 function showDetail(id) {
   const s=storeById(id);if(!canEdit(s))return;
   const visits=db.visits.filter(v=>v.storeId===id).sort((a,b)=>new Date(b.visitedAt)-new Date(a.visitedAt));
-  openDrawer(s.name,`${s.town} · ${s.type} · ${s.id}`,`<div class="detail-section"><div class="detail-status">${statusBadge(s.status)}${gradeBadge(s.grade)}${s.annotationIsDemo?'<span class="badge demo">演示业务标注 · 未核实</span>':''}</div><dl class="detail-info" style="margin-top:23px"><div class="full"><dt>详细地址</dt><dd>${esc(s.address)}</dd></div><div><dt>负责业务员</dt><dd>${rep(s.repId).name}</dd></div><div><dt>联系人</dt><dd>${esc(s.contact||'未登记')}</dd></div><div><dt>联系电话</dt><dd>${esc(s.phone||'未登记')}</dd></div><div><dt>最近走访</dt><dd>${formatDate(s.lastVisitAt,true)}</dd></div><div class="full"><dt>门店坐标（GCJ-02）</dt><dd>${Number(s.lng).toFixed(6)}, ${Number(s.lat).toFixed(6)}<small class="source-note" style="display:block">${esc(s.locationSource||'演示坐标 / 待现场核实')}</small></dd></div></dl></div><div class="detail-section"><h3>当前产品与陈列</h3><div class="selected-metrics" style="margin-top:0"><div><strong>${s.skuCount}</strong><small>在售 SKU</small></div><div><strong>${s.facings}</strong><small>陈列排面</small></div><div><strong>${visits.length}</strong><small>累计走访</small></div></div><p class="source-note" style="margin-top:17px">陈列位置：${esc(s.display)}<br>跟进备注：${esc(s.notes||'暂无')}</p></div><div class="detail-section"><h3>走访动态</h3>${visits.length?`<div class="timeline">${visits.map(v=>timelineItem(v)).join('')}</div>`:'<p class="source-note">尚无走访，登记第一条现场记录吧。</p>'}</div>`,`<button class="btn secondary" data-action="navigate" data-id="${s.id}">${icon('navigation')}打开导航</button><div class="actions"><button class="btn secondary" data-action="edit-store" data-id="${s.id}">编辑档案</button><button class="btn primary" data-action="visit" data-id="${s.id}">${icon('clipboard')}登记走访</button></div>`);
+  openDrawer(s.name,`${s.town} · ${s.type} · ${s.id}`,`<div class="detail-section"><div class="detail-status">${statusBadge(s.status)}${gradeBadge(s.grade)}${s.annotationIsDemo?'<span class="badge demo">演示业务标注 · 未核实</span>':''}</div><dl class="detail-info" style="margin-top:23px"><div class="full"><dt>详细地址</dt><dd>${esc(s.address)}</dd></div><div><dt>负责业务员</dt><dd>${rep(s.repId).name}</dd></div><div><dt>联系人</dt><dd>${esc(s.contact||'未登记')}</dd></div><div><dt>联系电话</dt><dd>${esc(s.phone||'未登记')}</dd></div><div><dt>最近走访</dt><dd>${formatDate(s.lastVisitAt,true)}</dd></div><div class="full"><dt>门店坐标（GCJ-02）</dt><dd>${Number(s.lng).toFixed(6)}, ${Number(s.lat).toFixed(6)}<small class="source-note" style="display:block">${esc(s.locationSource||'演示坐标 / 待现场核实')}</small></dd></div></dl></div><div class="detail-section"><h3>当前产品与陈列</h3><div class="selected-metrics" style="margin-top:0"><div><strong>${s.skuCount}</strong><small>在售 SKU</small></div><div><strong>${s.facings}</strong><small>陈列排面</small></div><div><strong>${visits.length}</strong><small>累计走访</small></div></div><p class="source-note" style="margin-top:17px">陈列位置：${esc(s.display)}<br>跟进备注：${esc(s.notes||'暂无')}</p></div><div class="detail-section"><div class="photo-manager-heading"><h3>门店照片</h3><button type="button" class="btn primary" data-action="store-photos" data-id="${s.id}">${icon('camera')}拍照 / 管理</button></div>${Object.keys(PHOTO_GROUPS).map(group=>storePhotoGroup(group,normalizeStorePhotos(s))).join('')}</div><div class="detail-section"><h3>走访动态</h3>${visits.length?`<div class="timeline">${visits.map(v=>timelineItem(v)).join('')}</div>`:'<p class="source-note">尚无走访，登记第一条现场记录吧。</p>'}</div>`,`<button class="btn secondary" data-action="navigate" data-id="${s.id}">${icon('navigation')}打开导航</button><div class="actions"><button class="btn secondary" data-action="edit-store" data-id="${s.id}">编辑档案</button><button class="btn primary" data-action="visit" data-id="${s.id}">${icon('clipboard')}登记走访</button></div>`);
   activeModal={type:'detail',id};
 }
 function timelineItem(v) {return `<div class="timeline-item"><h4>${formatDate(v.visitedAt,true)} · ${rep(v.repId).name}</h4><div style="margin-top:10px;display:flex;gap:9px">${statusBadge(v.status)}${gradeBadge(v.grade)}</div><p>${v.skuIds.length} 款 SKU · ${v.facings} 个排面 · ${esc(v.display)} · 库存${esc(v.stock)}<br>${esc(v.notes||'无补充备注')}<br><span class="source-note">${esc(v.locationSource||'未采集现场 GPS')}${v.accuracy?` · 精度约 ${Math.round(v.accuracy)} 米`:''}${v.locationSource?.startsWith('GPS')?`<br>GCJ-02：${v.lng.toFixed(6)}, ${v.lat.toFixed(6)}`:''}</span></p>${photoGallery(v.photos)}</div>`;}
@@ -318,8 +372,10 @@ async function processPhotos(files) {
 function renderPhotoPreviews(){if(!activeModal?.photos)return;$('#photo-previews').innerHTML=activeModal.photos.map((src,i)=>`<div class="photo-preview"><img src="${src}" alt="待上传现场照片 ${i+1}"><button type="button" data-remove-photo="${i}" aria-label="移除照片 ${i+1}">×</button></div>`).join('');}
 function formError(message){$('#form-error').innerHTML=`<div class="form-error" role="alert">${esc(message)}</div>`;$('.drawer-body').scrollTo({top:0,behavior:'smooth'});}
 function saveStore(form) {
+  if(activeModal?.processingPhotos){formError('照片正在处理，请稍后保存。');return;}
+  try{validateStorePhotos({photos:activeModal.storePhotos});}catch(error){formError(error.message);return;}
   const f=new FormData(form),id=activeModal.id||uid('store'),existing=storeById(activeModal.id);if(existing&&!canEdit(existing))return;
-  const s={...existing,id,name:f.get('name').trim(),town:f.get('town'),type:f.get('type'),address:f.get('address').trim(),contact:f.get('contact').trim(),phone:f.get('phone').trim(),repId:f.get('repId'),status:f.get('status'),grade:f.get('grade'),lng:Number(f.get('lng')),lat:Number(f.get('lat')),skuCount:Number(f.get('skuCount')),facings:Number(f.get('facings')),display:f.get('display'),notes:f.get('notes').trim(),lastVisitAt:existing?.lastVisitAt||'',monthlySales:existing?.monthlySales||0,createdAt:existing?.createdAt||new Date().toISOString(),isDemo:false,annotationIsDemo:false,userAnnotation:true,annotationSource:'user',annotationNotice:'',updatedAt:new Date().toISOString(),locationSource:activeModal.locationSource,accuracy:activeModal.accuracy};
+  const s={...existing,photos:structuredClone(activeModal.storePhotos),id,name:f.get('name').trim(),town:f.get('town'),type:f.get('type'),address:f.get('address').trim(),contact:f.get('contact').trim(),phone:f.get('phone').trim(),repId:f.get('repId'),status:f.get('status'),grade:f.get('grade'),lng:Number(f.get('lng')),lat:Number(f.get('lat')),skuCount:Number(f.get('skuCount')),facings:Number(f.get('facings')),display:f.get('display'),notes:f.get('notes').trim(),lastVisitAt:existing?.lastVisitAt||'',monthlySales:existing?.monthlySales||0,createdAt:existing?.createdAt||new Date().toISOString(),isDemo:false,annotationIsDemo:false,userAnnotation:true,annotationSource:'user',annotationNotice:'',updatedAt:new Date().toISOString(),locationSource:activeModal.locationSource,accuracy:activeModal.accuracy};
   if(!s.name||!s.address){formError('请填写门店名称和详细地址。');return;}
   if(!Number.isFinite(s.lng)||!Number.isFinite(s.lat)||s.lng<73||s.lng>135||s.lat<3||s.lat>54){formError('请输入中国境内有效的 GCJ-02 经纬度，或获取当前位置。');return;}
   if(s.status==='red'&&(s.skuCount>0||s.facings>0||s.display!=='未陈列')){formError('未铺货门店应为 0 款 SKU、0 个排面和未陈列；有产品请选择待提升或已达标。');return;}
@@ -352,6 +408,7 @@ function validateData(data) {
   if(!data||!Array.isArray(data.stores)||!Array.isArray(data.visits)||data.stores.length>10000||data.visits.length>50000||!data.settings||typeof data.settings.tencentKey!=='string'||data.settings.tencentKey.length>300)throw new Error('备份格式不正确或数据过大');
   const ids=new Set();const knownReps=new Set(REPS.map(r=>r.id));
   for(const s of data.stores){
+    validateStorePhotos(s);
     if(!s||typeof s.id!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(s.id)||ids.has(s.id)||!['unvisited','red','yellow','green'].includes(s.status)||!['ungraded','A','B','C'].includes(s.grade)||!TOWN_OPTIONS.includes(s.town)||(s.repId!==''&&!knownReps.has(s.repId))||!STORE_TYPES.includes(s.type)||typeof s.name!=='string'||!s.name.trim()||s.name.length>150||typeof s.address!=='string'||s.address.length>180||!Number.isFinite(s.lng)||!Number.isFinite(s.lat)||s.lng<73||s.lng>135||s.lat<3||s.lat>54||!Number.isInteger(s.skuCount)||s.skuCount<0||s.skuCount>100||!Number.isInteger(s.facings)||s.facings<0||s.facings>999)throw new Error('门店资料格式不正确');
     for(const key of ['contact','phone','display','notes','createdAt'])if(typeof s[key]!=='string')throw new Error('门店字段缺失');
     if(s.isDemo!==undefined&&typeof s.isDemo!=='boolean')throw new Error('门店数据来源格式不正确');
@@ -369,7 +426,7 @@ function validateData(data) {
 }
 async function importBackup(file){
   if(state.role!=='admin')return;if(file.size>12*1024*1024){notify('备份文件请小于 12MB。',true);return;}
-  try{const parsed=JSON.parse(await file.text());validateData(parsed);const data=migrateCatalog(parsed);validateData(data);openSmallModal('恢复这份备份？',`恢复后包含 ${data.stores.length} 家门店、${data.visits.length} 条走访；旧版名录会自动升级。恢复会覆盖本浏览器当前数据，请先导出当前备份。`,`<div class="actions" style="margin-top:23px"><button class="btn secondary" data-action="backup">先导出当前数据</button><button class="btn primary" id="confirm-import">恢复这份备份</button></div>`);$('#confirm-import').addEventListener('click',()=>{try{localStorage.setItem(STORAGE_KEY,JSON.stringify(data));db=data;closeModal();Object.assign(state,{pageNumber:1,selected:null});render();notify('备份已恢复');}catch{notify('恢复失败，浏览器存储空间不足。',true);}});}
+  try{const parsed=JSON.parse(await file.text());validateData(parsed);const data=migrateCatalog(parsed);validateData(data);openSmallModal('恢复这份备份？',`恢复后包含 ${data.stores.length} 家门店、${data.visits.length} 条走访；旧版名录会自动升级。恢复会覆盖本浏览器当前数据，请先导出当前备份。`,`<div class="actions" style="margin-top:23px"><button class="btn secondary" data-action="backup">先导出当前数据</button><button class="btn primary" id="confirm-import">恢复这份备份</button></div>`);$('#confirm-import').addEventListener('click',()=>{try{localStorage.setItem(STORAGE_KEY,assertDatasetStorageBudget(data));db=data;closeModal();Object.assign(state,{pageNumber:1,selected:null});render();notify('备份已恢复');}catch{notify('恢复失败，浏览器存储空间不足。',true);}});}
   catch(error){notify(`无法恢复：${error.message}`,true);}
 }
 function navigateStore(id){const s=storeById(id);if(!canEdit(s))return;openSmallModal('打开腾讯地图导航',`目的地：${s.name}。${s.catalogRecord?'名称、地址和坐标来自腾讯地图名录，请核实实时营业情况与入口。':s.locationSource?.startsWith('GPS')?'请结合现场情况核实目的地。':'当前坐标尚未现场核实，请先确认真实位置。'}`,`<p style="margin-top:15px">地址：${esc(s.address)}</p><div class="actions" style="margin-top:23px"><button class="btn secondary" data-action="close-modal">取消</button><a class="btn primary" target="_blank" rel="noopener" href="https://apis.map.qq.com/uri/v1/routeplan?type=drive&from=我的位置&to=${encodeURIComponent(s.name)}&tocoord=${s.lat},${s.lng}&policy=1&referer=lishen-fieldwork">${icon('navigation')}打开腾讯地图</a></div>`);}
@@ -383,8 +440,12 @@ document.addEventListener('click',event=>{
   const remove=event.target.closest('[data-remove-photo]');if(remove&&activeModal?.type==='visit'){activeModal.photos.splice(Number(remove.dataset.removePhoto),1);renderPhotoPreviews();return;}
   const button=event.target.closest('[data-action]');if(!button)return;const {action,id}=button.dataset;
   const handlers={
+    'open-town':()=>openTown(button.dataset.town),'all-outlets':()=>navigate('outlets'),
     'mobile-menu':()=>$('.sidebar').classList.toggle('mobile-open'),
     'close-modal':()=>closeModal(), 'new-store':()=>storeForm(), 'edit-store':()=>storeForm(id), 'detail':()=>showDetail(id),
+    'store-photos':()=>openPhotoManager(id),
+    'remove-store-photo':()=>{if(!activeModal?.storePhotos||activeModal.processingPhotos)return;const group=button.dataset.group;if(!Object.hasOwn(PHOTO_GROUPS,group))return;activeModal.storePhotos[group]=activeModal.storePhotos[group].filter(p=>p.id!==button.dataset.photoId);refreshStorePhotoEditor();},
+    'close-photo-viewer':closePhotoViewer,
     'new-visit':()=>visitForm(), 'visit':()=>visitForm(id), 'visit-detail':()=>showVisit(id), 'role':roleDialog,
     'export':exportCSV,'backup':backup, 'navigate':()=>navigateStore(id),
     'copy-share-url':async()=>{try{await navigator.clipboard.writeText(new URL('./',location.href).href);notify('展示链接已复制');}catch{notify('复制未成功，请从浏览器地址栏复制当前网站地址。',true);}},
@@ -397,19 +458,20 @@ document.addEventListener('click',event=>{
     'add-demo':()=>{if(state.role!=='admin')return;if(commit(next=>{Object.assign(next,clearDemoAnnotations(next));next.stores=applyDemoAnnotations(next.stores,6);next.settings.demoAnnotationsRemoved=false;})){render();notify('已为少量未核实门店添加虚拟业务标注示例');}},
     'quick-tag':()=>quickTagForm(id), 'map-gps':()=>mapGPS(button),
     'map-fit':()=>mainMap?.fitAll(),'map-zoom-in':()=>mainMap?.zoom(1),'map-zoom-out':()=>mainMap?.zoom(-1),
-    'clear-filters':()=>{Object.assign(state,{town:'',status:'',grade:'',query:'',repFilter:'',visitDate:'',pageNumber:1});renderContent();},
+    'clear-filters':()=>{Object.assign(state,{town:'',status:'',grade:'',query:'',repFilter:'',visitDate:'',pageNumber:1});if(state.page==='outlets')location.hash='outlets';render();},
     'followups':()=>{navigate('outlets');state.status='unvisited';renderContent();notify('已筛选待首次走访门店');},
     'rep-stores':()=>{navigate('outlets');state.repFilter=id;renderContent();},
     'store-gps':()=>captureLocation(button,'store'), 'visit-gps':()=>captureLocation(button,'visit'),
     'clear-key':()=>{if(commit(next=>{next.settings.tencentKey='';next.settings.mapKeyConfigured=true;})){renderContent();notify('已清除 Key，恢复示意底图');}},
     'import':()=>{const input=document.createElement('input');input.type='file';input.accept='.json,application/json';input.onchange=()=>input.files[0]&&importBackup(input.files[0]);input.click();},
     'delete-store':()=>{if(state.role!=='admin')return;const s=storeById(id);openSmallModal('删除这家门店？',`将删除“${s.name}”及其 ${db.visits.filter(v=>v.storeId===id).length} 条走访记录。请确认已备份。`,`<div class="actions" style="margin-top:23px"><button class="btn secondary" data-action="close-modal">取消</button><button class="btn danger" id="confirm-delete">删除门店及记录</button></div>`);$('#confirm-delete').onclick=()=>{if(commit(next=>{next.stores=next.stores.filter(s=>s.id!==id);next.visits=next.visits.filter(v=>v.storeId!==id);})){closeModal();state.selected=null;state.pageNumber=1;render();notify('门店与关联记录已删除');}};},
-    'view-photo':()=>{const src=button.dataset.photo;openSmallModal('现场照片','走访时上传的照片。',`<img src="${src}" alt="现场照片大图" style="display:block;width:100%;max-height:65vh;object-fit:contain;margin-top:20px;border-radius:8px">`);}
+    'view-photo':()=>openPhotoViewer(button.dataset.photo,button.dataset.photoTitle||'现场照片')
   };handlers[action]?.();
 });
 document.addEventListener('change',event=>{
   const target=event.target;
-  if(target.matches('[data-filter]')){state[target.dataset.filter]=target.value;state.pageNumber=1;renderContent();}
+  if(target.matches('[data-filter]')){state[target.dataset.filter]=target.value;state.pageNumber=1;if(target.dataset.filter==='town'&&state.page==='outlets'){location.hash='outlets'+(state.town?'?town='+encodeURIComponent(state.town):'');render();}else renderContent();}
+  if(target.matches('[data-store-photo-input]'))processStorePhotos([...target.files],target.dataset.storePhotoInput,target.dataset.replaceId);
   if(target.id==='visit-photos'&&target.files.length)processPhotos([...target.files]);
   if(target.id==='f-storeId'&&activeModal?.type==='visit'){
     const s=storeById(target.value);activeModal.storeId=s.id;$('#f-grade').value=s.grade;$('#f-facings').value=s.facings;$('#f-display').value=s.display;$('#f-stock').value=s.stock||'未登记';if(state.role==='admin')$('#f-repId').value=s.repId||REPS[0].id;
@@ -431,13 +493,15 @@ document.addEventListener('input',event=>{
   }
 });
 document.addEventListener('keydown',event=>{
+  if(event.key==='Escape'&&$('.photo-lightbox')){closePhotoViewer();return;}
   if(event.key==='Escape'){if($('#overlay-root').children.length)closeModal();else $('.sidebar')?.classList.remove('mobile-open');}
-  if(event.key==='Tab'&&$('#overlay-root').children.length){const elements=[...$('#overlay-root').querySelectorAll('button:not([disabled]),a[href],input:not([disabled]):not([type="hidden"]),select,textarea')].filter(el=>el.getClientRects().length);if(!elements.length)return;const first=elements[0],last=elements.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
+  if(event.key==='Tab'&&$('#overlay-root').children.length){const elements=[...($('.photo-lightbox')||$('#overlay-root')).querySelectorAll('button:not([disabled]),a[href],input:not([disabled]):not([type="hidden"]),select,textarea')].filter(el=>el.getClientRects().length);if(!elements.length)return;const first=elements[0],last=elements.at(-1);if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}}
   if(event.key==='/'&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)&&!$('#overlay-root').children.length){event.preventDefault();$('#global-search')?.focus();}
   if(event.key==='Enter'&&event.target.id==='global-search'){event.preventDefault();const query=event.target.value.trim();navigate('outlets');state.query=query;renderContent();}
 });
 document.addEventListener('submit',async event=>{
   if(event.target.id==='marker-form'){event.preventDefault();saveMarker(event.target);}
+  if(event.target.id==='store-photos-form'){event.preventDefault();saveStorePhotos();}
   if(event.target.id==='store-form'){event.preventDefault();saveStore(event.target);}
   if(event.target.id==='visit-form'){event.preventDefault();saveVisit(event.target);}
   if(event.target.id==='key-form'){
@@ -450,5 +514,5 @@ document.addEventListener('submit',async event=>{
     finally{if(button.isConnected)button.disabled=false;}
   }
 });
-window.addEventListener('hashchange',()=>{const next=validPage(location.hash.slice(1));if(next!==state.page){closeModal();state.page=next;render();}});
+window.addEventListener('hashchange',()=>{const next=parseRoute();if(next.page!==state.page||next.town!==state.town){closeModal();Object.assign(state,{page:next.page,town:next.town,status:'',query:'',grade:'',repFilter:'',pageNumber:1,selected:null});if(next.town)state.view='list';render();}});
 render();if(storageWarning)notify(storageWarning,true);

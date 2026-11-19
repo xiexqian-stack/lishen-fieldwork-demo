@@ -1,4 +1,5 @@
 import { PRODUCTS } from './products.js';
+import { hasStorePhotos } from './store-photos.js';
 
 const plainText = value => typeof value === 'string' ? value.trim() : '';
 const isRealCatalogStore = store => store.catalogRecord === true &&
@@ -80,7 +81,7 @@ export function markUserAnnotation(store, fields = {}) {
 export function applyDemoAnnotations(stores, count = 5) {
   const next = structuredClone(stores);
   const eligible = next.map((store, index) => ({ store, index })).filter(({ store }) =>
-    isRealCatalogStore(store) && store.userAnnotation !== true &&
+    isRealCatalogStore(store) && store.userAnnotation !== true && !hasStorePhotos(store) &&
     (store.annotationIsDemo === true || store.status === 'unvisited' || store.status == null));
   const target = Math.min(eligible.length, Math.max(0, Math.floor(Number(count) || 0)));
   const presets = [

@@ -1,5 +1,6 @@
 import { CATALOG_META, createSeedData } from './data.js';
 import { clearDemoAnnotations, hasUserVisitEvidence } from './business-annotations.js';
+import { hasStorePhotos } from './store-photos.js';
 
 const legacyStoreId = id => typeof id === 'string' && /^store-\d{3}$/.test(id);
 const legacyVisitId = id => typeof id === 'string' && /^visit-\d{3}$/.test(id);
@@ -45,7 +46,7 @@ export function migrateCatalog(db) {
   for (const store of next.stores) {
     const oldFictional = isOldFictionalStore(store);
     const safeToRemove = oldFictional && store.isDemo !== false &&
-      !store.updatedAt && !store.userAnnotation && !protectedStoreIds.has(store.id);
+      !store.updatedAt && !store.userAnnotation && !hasStorePhotos(store) && !protectedStoreIds.has(store.id);
     if (safeToRemove) continue;
     if (oldFictional) {
       // It may now contain actual work; retain it without claiming a real POI source.

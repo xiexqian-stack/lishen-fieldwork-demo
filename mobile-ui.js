@@ -1,7 +1,7 @@
 /** Phone presentation helpers. Existing delegated app actions perform mutations. */
 export function mobileNav(page, icon) {
   const items = [
-    ['overview', 'grid', '总览'],
+    ['overview', 'grid', '首页'],
     ['outlets', 'pin', '门店'],
     ['visits', 'clipboard', '走访'],
     ['settings', 'settings', '设置'],
@@ -11,7 +11,7 @@ export function mobileNav(page, icon) {
 
 function actions(store, { esc, icon }) {
   const id = esc(store.id), name = esc(store.name);
-  return `<div class="mobile-store-actions"><button type="button" class="mobile-action-tag" data-action="quick-tag" data-id="${id}" aria-label="修改${name}的标记">${icon('pin')}<span>改标记</span></button><button type="button" class="mobile-action-visit" data-action="visit" data-id="${id}" aria-label="登记${name}的走访">${icon('clipboard')}<span>登记走访</span></button><button type="button" class="mobile-action-route" data-action="navigate" data-id="${id}" aria-label="导航到${name}">${icon('navigation')}<span>导航</span></button></div>`;
+  return `<div class="mobile-store-actions"><button type="button" class="mobile-action-tag" data-action="quick-tag" data-id="${id}" aria-label="修改${name}的标记">${icon('pin')}<span>改标记</span></button><button type="button" class="mobile-action-visit" data-action="visit" data-id="${id}" aria-label="登记${name}的走访">${icon('clipboard')}<span>登记走访</span></button><button type="button" class="mobile-action-photo" data-action="store-photos" data-id="${id}" aria-label="管理${name}的照片">${icon('camera')}<span>照片</span></button><button type="button" class="mobile-action-route" data-action="navigate" data-id="${id}" aria-label="导航到${name}">${icon('navigation')}<span>导航</span></button></div>`;
 }
 
 function provenance(store) {
