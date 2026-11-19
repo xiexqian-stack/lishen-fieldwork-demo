@@ -122,6 +122,8 @@ export function getDemoAnnotationPreview(db) {
 /** Clears fictional annotations while preserving every POI and all user work. */
 export function clearDemoAnnotations(db) {
   const next = structuredClone(db);
+  const deletedVisitKeys = new Set(next.visits.filter(isDisposableDemoVisit)
+    .map(visit => `${visit.storeId}\0${visit.visitedAt}`));
   next.visits = next.visits.filter(visit => !isDisposableDemoVisit(visit));
   for (const visit of next.visits) {
     if (visit.isDemo === true && hasUserVisitEvidence(visit)) {
@@ -130,7 +132,20 @@ export function clearDemoAnnotations(db) {
     }
   }
   const realVisitStoreIds = new Set(next.visits.map(visit => visit.storeId));
+  const retainedVisitKeys = new Set(next.visits.map(visit => `${visit.storeId}\0${visit.visitedAt}`));
+  const latestVisits = new Map();
+  for (const visit of next.visits) {
+    const previous = latestVisits.get(visit.storeId);
+    if (Number.isFinite(Date.parse(visit.visitedAt)) &&
+        (!previous || Date.parse(visit.visitedAt) > Date.parse(previous))) {
+      latestVisits.set(visit.storeId, visit.visitedAt);
+    }
+  }
   next.stores = next.stores.map(store => {
+    const lastVisitKey = `${store.id}\0${store.lastVisitAt}`;
+    if (store.lastVisitAt && deletedVisitKeys.has(lastVisitKey) && !retainedVisitKeys.has(lastVisitKey)) {
+      store.lastVisitAt = latestVisits.get(store.id) || '';
+    }
     if (store.annotationIsDemo !== true) return store;
     if (store.userAnnotation === true || realVisitStoreIds.has(store.id)) {
       return { ...store, isDemo: false, annotationIsDemo: false,

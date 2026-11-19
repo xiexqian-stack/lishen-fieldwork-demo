@@ -61,7 +61,7 @@ export function migrateCatalog(db) {
     keptStores.push(store);
   }
 
-  let seed = createSeedData();
+  let seed = createSeedData({withDemoScenario:false});
   // A previous request to clear the samples must survive catalog upgrades.
   if (next.settings?.demoAnnotationsRemoved || next.settings?.demoDataRemoved) {
     seed = clearDemoAnnotations(seed);

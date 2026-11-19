@@ -15,15 +15,15 @@ function actions(store, { esc, icon }) {
 }
 
 function provenance(store) {
-  return store.annotationIsDemo === true ? '<span class="mobile-demo-label">演示标记</span>' : '';
+  return store.annotationIsDemo === true ? (store.lastVisitAt ? '<span class="mobile-demo-label">已走访 · 演示</span>' : '<span class="mobile-demo-label">演示标记</span>') : '';
 }
 
 export function mobileStoreCards(stores, helpers) {
-  const { esc, icon, statusBadge, gradeBadge, formatDate, rep } = helpers;
+  const { esc, icon, statusBadge, gradeBadge, formatDate, rep, lastVisitIsDemo } = helpers;
   return `<div class="mobile-store-cards">${stores.map(store => {
     const id = esc(store.id);
     const owner = store.repId ? rep(store.repId)?.name : '未分配';
-    return `<article class="mobile-store-card"><div class="mobile-store-card-heading"><button type="button" class="mobile-store-title" data-action="detail" data-id="${id}" aria-label="查看${esc(store.name)}的档案"><span class="mobile-store-type-icon">${icon(/茶|咖啡/.test(store.type) ? 'coffee' : 'store')}</span><span><strong>${esc(store.name)}</strong><small>${esc(store.town || '乡镇待核实')} · ${esc(store.type || '茶饮门店')}</small></span></button><button type="button" class="mobile-edit-archive" data-action="edit-store" data-id="${id}" aria-label="编辑${esc(store.name)}的档案">档案${icon('chevron')}</button></div><div class="mobile-store-labels">${statusBadge(store.status)}${gradeBadge(store.grade)}${provenance(store)}</div><p class="mobile-store-address">${icon('pin')}<span>${esc(store.address || '详细地址待核实')}</span></p><div class="mobile-store-meta"><span>${icon('users')}${esc(owner || '未分配')}</span><span>${icon('clock')}${store.lastVisitAt ? formatDate(store.lastVisitAt) : '尚未走访'}</span></div>${actions(store, helpers)}</article>`;
+    return `<article class="mobile-store-card"><div class="mobile-store-card-heading"><button type="button" class="mobile-store-title" data-action="detail" data-id="${id}" aria-label="查看${esc(store.name)}的档案"><span class="mobile-store-type-icon">${icon(/茶|咖啡/.test(store.type) ? 'coffee' : 'store')}</span><span><strong>${esc(store.name)}</strong><small>${esc(store.town || '乡镇待核实')} · ${esc(store.type || '茶饮门店')}</small></span></button><button type="button" class="mobile-edit-archive" data-action="edit-store" data-id="${id}" aria-label="编辑${esc(store.name)}的档案">档案${icon('chevron')}</button></div><div class="mobile-store-labels">${statusBadge(store.status)}${gradeBadge(store.grade)}${provenance(store)}</div><p class="mobile-store-address">${icon('pin')}<span>${esc(store.address || '详细地址待核实')}</span></p><div class="mobile-store-meta"><span>${icon('users')}${esc(owner || '未分配')}</span><span>${icon('clock')}${store.lastVisitAt ? (lastVisitIsDemo(store)?'演示走访 · ':'已走访 · ')+formatDate(store.lastVisitAt) : '尚未走访'}</span></div>${actions(store, helpers)}</article>`;
   }).join('')}</div>`;
 }
 

@@ -1,5 +1,6 @@
 import { POI_CATALOG } from './poi-catalog.js';
 import { createPoiStore, applyDemoAnnotations } from './business-annotations.js';
+import { applyDemoScenario } from './demo-scenario.js';
 export { PRODUCTS } from './products.js';
 export const CATALOG_META=POI_CATALOG.metadata;
 export const STORE_TYPES=['老爸茶店','茶饮店','茶馆','咖啡店','茶餐厅','便利店','商超','餐饮店'];
@@ -49,7 +50,8 @@ export function daysSince(value) {
 }
 
 
-export function createSeedData(){
+export function createSeedData({withDemoScenario=true}={}){
  const stores=POI_CATALOG.items.map(poi=>createPoiStore(poi,{town:poi.town||'乡镇待核实',type:poi.storeType||'茶饮店',importedAt:POI_CATALOG.metadata.fetchedAt}));
- return {stores:applyDemoAnnotations(stores,6),visits:[],settings:{tencentKey:'',defaultCity:'琼海市',catalogVersion:POI_CATALOG.metadata.version}};
+ const seed={stores:applyDemoAnnotations(stores,6),visits:[],settings:{tencentKey:'',defaultCity:'琼海市',catalogVersion:POI_CATALOG.metadata.version}};
+ return withDemoScenario?applyDemoScenario(seed):seed;
 }

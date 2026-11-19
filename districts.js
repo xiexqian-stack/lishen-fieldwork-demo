@@ -7,16 +7,25 @@ const UNASSIGNED_TOWN = '乡镇待核实';
  * visited counts distinct stores with a non-demo visit; verified only means a
  * person saved a non-demo business status, not GPS verification or catalog completeness.
  * unvisited means no real visit and no verified business status; a demo label does not qualify.
+ * demoVisited counts distinct visible stores with an explicitly fictional visit.
+ * displayVisited is the union of real and fictional visited stores, so a store
+ * with both kinds of visit contributes once. pendingDisplay uses that union
+ * while still recognizing a non-demo manually saved business status.
+ * These display counters never promote fictional records into verified facts.
  * withPhotos counts stores with storefront/display archive photos, not historical visit photos.
  */
 export function getDistrictSummaries(stores = [], visits = []) {
   const rows = [...TOWNS, UNASSIGNED_TOWN].map(town => ({
     town, total: 0, unvisited: 0, visited: 0, withPhotos: 0,
     verified: 0, stocked: 0, demo: 0,
+    demoVisited: 0, displayVisited: 0, pendingDisplay: 0,
   }));
   const byTown = new Map(rows.map(row => [row.town, row]));
   const realVisitStoreIds = new Set((Array.isArray(visits) ? visits : [])
     .filter(visit => visit && visit.isDemo !== true)
+    .map(visit => visit.storeId));
+  const demoVisitStoreIds = new Set((Array.isArray(visits) ? visits : [])
+    .filter(visit => visit && visit.isDemo === true)
     .map(visit => visit.storeId));
   const seenIds = new Set();
 
@@ -29,6 +38,8 @@ export function getDistrictSummaries(stores = [], visits = []) {
     }
     const row = byTown.get(store.town) || byTown.get(UNASSIGNED_TOWN);
     const hasVisit = store.id != null && realVisitStoreIds.has(store.id);
+    const hasDemoVisit = store.id != null && demoVisitStoreIds.has(store.id);
+    const hasDisplayVisit = hasVisit || hasDemoVisit;
     const isDemo = store.annotationIsDemo === true;
     const isVerified = store.userAnnotation === true && !isDemo &&
       store.status !== 'unvisited';
@@ -37,7 +48,10 @@ export function getDistrictSummaries(stores = [], visits = []) {
 
     row.total++;
     if (hasVisit) row.visited++;
+    if (hasDemoVisit) row.demoVisited++;
+    if (hasDisplayVisit) row.displayVisited++;
     if (!hasVisit && !isVerified) row.unvisited++;
+    if (!hasDisplayVisit && !isVerified) row.pendingDisplay++;
     if (hasPhotos) row.withPhotos++;
     if (isVerified) row.verified++;
     if (isVerified && ['yellow', 'green'].includes(store.status)) row.stocked++;
