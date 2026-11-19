@@ -254,7 +254,37 @@ tbody tr:hover {background:#fffcf6}
 .photo-upload {background:#fffaf1;border-color:#d7bd93;color:#b0936b}
 .photo-preview img,.timeline-photos img {border:1px solid #eadbc6;border-radius:7px}
 
-/* The product introduction uses a separate content and product column. */
+/* The overview map occupies the former poster slot; other maps keep their size. */
+.overview-map {display:flex;flex-direction:column;height:282px;margin:0 0 23px}
+.overview-map>.panel-header {flex-shrink:0;min-height:42px;padding:9px 18px}
+.overview-map>.map-toolbar {flex-shrink:0;padding:5px 13px}
+.overview-map>.map-stage {flex:1;min-height:0;height:auto}
+.overview-map #main-map,.overview-map .sm {height:100%;min-height:0}
+.overview-map>.map-footer {flex-shrink:0;padding:7px 14px}
+.overview-map .map-controls {right:10px;bottom:10px}
+.overview-followups {margin-bottom:22px}
+.overview-followups .follow-list {display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px}
+.overview-followups .follow-item {min-width:0;border-bottom:0}
+.overview-followups .follow-name {max-width:none}
+@media(min-width:761px) and (max-width:1199px) {
+  .overview-map {height:270px}
+  .overview-map .status-filter {padding:7px 6px;font-size:9px}
+}
+@media(max-width:760px) {
+  .overview-map {height:400px;margin-bottom:19px}
+  .overview-map>.panel-header {min-height:48px;padding:10px 12px;gap:7px}
+  .overview-map .map-title-location {font-size:9px}
+  .overview-map>.map-toolbar {padding:5px 9px;gap:3px}
+  .overview-map .map-toolbar .select-minimal {min-height:44px}
+  .overview-map>.map-footer {padding:7px 10px;gap:3px}
+  .overview-map .grade-legend {gap:9px}
+  .overview-map .map-mode {margin-left:auto}
+  .overview-map .map-controls {display:flex;right:9px;bottom:10px}
+  .overview-map .map-controls button {width:40px;min-height:44px;height:44px;border-bottom:0;border-right:1px solid #eee3d4}
+  .overview-map .map-controls button:last-child {border:0}
+}
+
+/* Product presentation styles for supporting screens. */
 .hero-banner {
   min-width:0;
   display:grid;

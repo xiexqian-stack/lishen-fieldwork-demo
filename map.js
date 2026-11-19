@@ -125,11 +125,13 @@ function loadSDK(key) {
 }
 
 export class StoreMap {
-  constructor(container, { onSelect, onCoordinate } = {}) {
+  constructor(container, { onSelect, onCoordinate, fitPadding = 70, showControl = true } = {}) {
     if (!(container instanceof HTMLElement)) throw new Error('StoreMap 需要有效的地图容器。');
     this.container = container;
     this.onSelect = onSelect || (() => {});
     this.onCoordinate = onCoordinate || (() => {});
+    this.fitPadding = fitPadding;
+    this.showControl = showControl;
     this.stores = [];
     this.selectedId = null;
     this.center = { lng: 110.49, lat: 19.25 };
@@ -274,7 +276,7 @@ export class StoreMap {
       const T = window.TMap;
       const latPad = maxLat - minLat < .001 ? .001 : 0;
       const lngPad = maxLng - minLng < .001 ? .001 : 0;
-      this.map.fitBounds(new T.LatLngBounds(new T.LatLng(minLat - latPad, minLng - lngPad), new T.LatLng(maxLat + latPad, maxLng + lngPad)), { padding: 70 });
+      this.map.fitBounds(new T.LatLngBounds(new T.LatLng(minLat - latPad, minLng - lngPad), new T.LatLng(maxLat + latPad, maxLng + lngPad)), { padding: this.fitPadding });
       return;
     }
     const vw = Math.max((maxLng - minLng) * 1920, 180);
@@ -364,7 +366,7 @@ export class StoreMap {
       this.online.hidden = false;
       this.map = new T.Map(this.online, {
         center: new T.LatLng(this.center.lat, this.center.lng),
-        zoom: 12, minZoom: 8, maxZoom: 18, pitch: 0, rotation: 0, viewMode: '2D'
+        zoom: 12, minZoom: 8, maxZoom: 18, pitch: 0, rotation: 0, viewMode: '2D', showControl: this.showControl
       });
       // The SDK script alone does not prove that the Key can load a map.
       await new Promise((resolve, reject) => {
