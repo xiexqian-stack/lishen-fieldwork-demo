@@ -1,4 +1,6 @@
-/* Offline schematic and optional Tencent GL map. All stored coordinates are GCJ-02. */
+/* Offline schematic and resilient online maps. All stored coordinates are GCJ-02. */
+import { createProviderMap, getAvailableProviders, providerLabel } from './map-providers.js';
+import { raceMapProviders } from './map-routing.js';
 const COLORS = { red: '#df6a5d', yellow: '#e7b64c', green: '#268870', unvisited: '#9ba79d' };
 const STATUS = { red: '未铺货', yellow: '待提升', green: '已达标', unvisited: '未走访' };
 const SYMBOLS = { A: '★', B: '▲', C: '●', ungraded: '待分级' };
@@ -9,8 +11,6 @@ function sourceLabel(store) {
   const origin = store.source === 'tencent' || store.catalogRecord === true ? '腾讯地点名录' : store.isDemo === true ? '演示门店' : '人工登记';
   return `${origin}${store.annotationIsDemo === true ? ' · 演示标记，待现场核实' : ''}`;
 }
-let sdkPromise;
-let sdkKey;
 
 const CSS = `
 .sm-user-location{position:absolute;width:30px;height:30px;transform:translate(-50%,-50%);border-radius:50%;border:1px solid #3384e470;background:#348bde28;pointer-events:none;z-index:8;box-shadow:0 0 0 8px #348bde10}.sm-user-location:after{content:'';position:absolute;inset:8px;border-radius:50%;background:#348bde;border:2px solid white;box-shadow:0 1px 4px #235c8c60}.sm-user-location-label{position:absolute;top:33px;left:50%;transform:translateX(-50%);white-space:nowrap;font-size:10px;color:#337ab4;background:#fffffff0;padding:3px 6px;border-radius:4px}.sm-selection-note{position:absolute;left:13px;top:13px;z-index:8;max-width:min(250px,calc(100% - 75px));padding:9px 12px;border:1px solid #dfe7dc;background:#fffffff2;border-radius:8px;box-shadow:0 3px 12px #254b2e10;pointer-events:none;color:#496541;line-height:1.6}.sm-selection-note strong{display:block;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.sm-selection-note span{font-size:10px;display:block;color:#829275}.sm-selected .sm-source-line{display:block;margin-top:4px;color:#a19a78;font-size:9px;white-space:normal;line-height:1.5}.sm-selection-note[hidden]{display:none}
@@ -96,40 +96,13 @@ function pinSVG(status, grade, size = 40) {
 
 const GPS_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="0 0 44 44"><circle cx="22" cy="22" r="20" fill="#348bde" fill-opacity=".16" stroke="#348bde" stroke-opacity=".35"/><circle cx="22" cy="22" r="7" fill="#348bde" stroke="white" stroke-width="3"/></svg>';
 
-function loadSDK(key) {
-  if (window.TMap?.Map && (!sdkKey || sdkKey === key)) return Promise.resolve(window.TMap);
-  if (sdkPromise && sdkKey === key) return sdkPromise;
-  if (window.TMap?.Map && sdkKey && sdkKey !== key) {
-    return Promise.reject(new Error('地图 Key 已更改，请保存后刷新页面以使用新的 Key。'));
-  }
-  sdkKey = key;
-  sdkPromise = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    const timeout = setTimeout(() => finish(new Error('地图加载超时，请检查网络、Key 和域名白名单后重试。')), 18000);
-    let complete = false;
-    function finish(error) {
-      if (complete) return;
-      complete = true;
-      clearTimeout(timeout);
-      script.onerror = script.onload = null;
-      if (error) { script.remove(); sdkPromise = null; reject(error); }
-      else resolve(window.TMap);
-    }
-    script.async = true;
-    script.src = `https://map.qq.com/api/gljs?v=1.exp&key=${encodeURIComponent(key)}`;
-    script.onload = () => finish(window.TMap?.Map ? null : new Error('腾讯地图 SDK 未能初始化，请检查 Key 是否启用 JavaScript API。'));
-    script.onerror = () => finish(new Error('无法加载腾讯地图，请检查网络连接及地图 Key。'));
-    document.head.append(script);
-  });
-  return sdkPromise;
-}
-
 export class StoreMap {
-  constructor(container, { onSelect, onCoordinate, fitPadding = 70, showControl = true } = {}) {
+  constructor(container, { onSelect, onCoordinate, onProviderChange, fitPadding = 70, showControl = true } = {}) {
     if (!(container instanceof HTMLElement)) throw new Error('StoreMap 需要有效的地图容器。');
     this.container = container;
     this.onSelect = onSelect || (() => {});
     this.onCoordinate = onCoordinate || (() => {});
+    this.onProviderChange = onProviderChange || (() => {});
     this.fitPadding = fitPadding;
     this.showControl = showControl;
     this.stores = [];
@@ -137,8 +110,12 @@ export class StoreMap {
     this.center = { lng: 110.49, lat: 19.25 };
     this.level = 1;
     this.provider = 'schematic';
+    this.providerLabel = providerLabel('schematic');
     this.destroyed = false;
     this.map = null;
+    this.adapter = null;
+    this.currentZoom = 12;
+    this.viewIntent = 'center';
     this.markerLayer = null;
     this.gpsLayer = null;
     this.userLocation = null;
@@ -163,7 +140,7 @@ export class StoreMap {
     this.selectionNote.hidden = true;
     this.root.append(this.selectionNote);
     this.bindOfflineEvents();
-    this.observer = new ResizeObserver(() => { this.render(); if (this.map?.resize) this.map.resize(); });
+    this.observer = new ResizeObserver(() => { this.render(); this.adapter?.resize(); });
     this.observer.observe(this.root);
     this.render();
   }
@@ -230,12 +207,13 @@ export class StoreMap {
   setStores(stores) {
     this.stores = (Array.isArray(stores) ? stores : []).filter(store => Number.isFinite(Number(store.lng)) && Number.isFinite(Number(store.lat))).map(store => ({ ...store, status: safeStatus(store.status), grade: safeGrade(store.grade) }));
     this.storeIndex = new Map(this.stores.map(store => [String(store.id), store]));
-    if (this.provider === 'tencent') this.syncTencentMarkers();
+    this.syncOnlineMarkers();
     this.render();
   }
 
   selectStore(id) {
     this.selectedId = id;
+    this.syncOnlineMarkers();
     const store = this.storeIndex.get(String(id));
     if (store) this.setCenter(Number(store.lng), Number(store.lat));
     else this.render();
@@ -244,7 +222,8 @@ export class StoreMap {
   setCenter(lng, lat) {
     if (!Number.isFinite(Number(lng)) || !Number.isFinite(Number(lat))) return;
     this.center = { lng: Number(lng), lat: Number(lat) };
-    if (this.map && this.provider === 'tencent') this.map.setCenter(new window.TMap.LatLng(this.center.lat, this.center.lng));
+    this.viewIntent = 'center';
+    this.adapter?.setCenter(this.center.lng, this.center.lat);
     this.render();
   }
 
@@ -253,13 +232,16 @@ export class StoreMap {
     const accuracy = typeof options === 'number' ? options : options?.accuracy;
     this.userLocation = { lng: Number(lng), lat: Number(lat), accuracy: Number.isFinite(Number(accuracy)) && Number(accuracy) > 0 ? Number(accuracy) : null };
     this.setCenter(lng, lat);
-    if (this.provider === 'tencent') { this.map.setZoom(15); this.syncTencentLocation(); }
+    this.viewIntent = 'location'; this.currentZoom = 15;
+    if (this.adapter) this.adapter.locate(this.userLocation, GPS_SVG);
     else { this.level = Math.max(4, this.level); this.render(); }
   }
 
   zoom(delta) {
-    if (this.provider === 'tencent') {
-      this.map.setZoom(Math.min(18, Math.max(8, this.map.getZoom() + Number(delta))));
+    if (this.adapter) {
+      this.adapter.zoom(delta);
+      this.currentZoom = this.map?.getZoom?.() ?? this.currentZoom;
+      this.viewIntent = 'center';
       return;
     }
     this.level = Math.max(.55, Math.min(12, this.level * Math.pow(1.3, Number(delta))));
@@ -267,16 +249,14 @@ export class StoreMap {
   }
 
   fitAll() {
+    this.viewIntent = 'fit';
     if (!this.stores.length) { this.level = 1; this.setCenter(110.49, 19.25); return; }
     const lngs = this.stores.map(store => Number(store.lng));
     const lats = this.stores.map(store => Number(store.lat));
     const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
     const minLat = Math.min(...lats), maxLat = Math.max(...lats);
-    if (this.map && this.provider === 'tencent') {
-      const T = window.TMap;
-      const latPad = maxLat - minLat < .001 ? .001 : 0;
-      const lngPad = maxLng - minLng < .001 ? .001 : 0;
-      this.map.fitBounds(new T.LatLngBounds(new T.LatLng(minLat - latPad, minLng - lngPad), new T.LatLng(maxLat + latPad, maxLng + lngPad)), { padding: this.fitPadding });
+    if (this.adapter) {
+      this.adapter.fitAll(this.stores, this.fitPadding);
       return;
     }
     const vw = Math.max((maxLng - minLng) * 1920, 180);
@@ -284,6 +264,7 @@ export class StoreMap {
     const ratio = Math.max(1, this.root.clientWidth) / Math.max(1, this.root.clientHeight);
     this.level = Math.max(.55, Math.min(6, 1113.6 / Math.max(vw * 1.35, vh * ratio * 1.35)));
     this.setCenter((minLng + maxLng) / 2, (minLat + maxLat) / 2);
+    this.viewIntent = 'fit';
   }
 
   render() {
@@ -346,7 +327,7 @@ export class StoreMap {
 
   updateSelectionNote() {
     const store = this.storeIndex.get(String(this.selectedId));
-    this.selectionNote.hidden = this.provider !== 'tencent' || !store;
+    this.selectionNote.hidden = this.provider === 'schematic' || !store;
     if (!store || this.selectionNote.hidden) return;
     const name = document.createElement('strong'); name.textContent = store.name;
     const state = document.createElement('span'); state.textContent = `${gradeLabel(store.grade)} · ${STATUS[safeStatus(store.status)]}`;
@@ -356,106 +337,109 @@ export class StoreMap {
 
   async setKey(value) {
     const key = String(value || '').trim();
-    const requestId = (this.requestId || 0) + 1;
-    this.requestId = requestId;
-    if (!key) { this.useOffline(); return { provider: 'schematic' }; }
-    if (this.map) this.useOffline();
-    try {
-      const T = await loadSDK(key);
-      if (this.destroyed || requestId !== this.requestId) throw new Error('地图加载已取消。');
-      this.online.hidden = false;
-      this.map = new T.Map(this.online, {
-        center: new T.LatLng(this.center.lat, this.center.lng),
-        zoom: 12, minZoom: 8, maxZoom: 18, pitch: 0, rotation: 0, viewMode: '2D', showControl: this.showControl
+    return this.setProviders(key ? { tencent: { jsKey: key } } : {});
+  }
+
+  setProviders(configs = {}, routingOptions = {}) {
+    if (this.destroyed) return Promise.reject(new DOMException('地图加载已取消。', 'AbortError'));
+    const providers = getAvailableProviders(configs);
+    const fingerprint = JSON.stringify(providers.map(id => [id, configs[id]]));
+    if (this.configFingerprint === fingerprint) {
+      if (this.loadingPromise) return this.loadingPromise;
+      if (this.adapter) return Promise.resolve({ provider: this.provider, label: this.providerLabel });
+    }
+    this.useOffline();
+    this.configFingerprint = fingerprint;
+    if (!providers.length) return Promise.resolve({ provider: 'schematic', label: providerLabel('schematic') });
+    const requestId = this.requestId;
+    const controller = new AbortController();
+    this.loadingController = controller;
+    // Candidate layers have full size even while transparent, so SDKs render tiles.
+    // The schematic remains above them until a verified candidate wins.
+    this.online.hidden = false;
+    const pending = raceMapProviders(providers, async (provider, { signal }) => {
+      const layer = document.createElement('div');
+      layer.className = 'sm-provider-layer';
+      layer.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;opacity:0;pointer-events:none';
+      layer.dataset.mapProvider = provider;
+      this.online.append(layer);
+      let adapter;
+      const cancel = () => { adapter?.destroy(); layer.remove(); };
+      signal.addEventListener('abort', cancel, { once: true });
+      try {
+        adapter = await createProviderMap(provider, layer, configs[provider], {
+          center: this.center, zoom: this.currentZoom, showControl: this.showControl,
+          sdkTimeoutMs: 7500, signal,
+        });
+        await adapter.ready(6500);
+        if (signal.aborted || this.destroyed || requestId !== this.requestId) throw new DOMException('地图加载已取消。', 'AbortError');
+        return { adapter, layer, destroy: () => { signal.removeEventListener('abort', cancel); cancel(); } };
+      } catch (error) {
+        signal.removeEventListener('abort', cancel); cancel(); throw error;
+      }
+    }, { ...routingOptions, signal: controller.signal }).then(result => {
+      if (this.destroyed || requestId !== this.requestId) {
+        result.resource.destroy(); throw new DOMException('地图加载已取消。', 'AbortError');
+      }
+      this.onlineResource = result.resource;
+      this.adapter = result.resource.adapter;
+      this.map = this.adapter.map;
+      this.provider = result.provider;
+      this.providerLabel = providerLabel(this.provider);
+      this.adapter.onCoordinate(pos => {
+        if (!this.destroyed && requestId === this.requestId) this.onCoordinate(pos);
       });
-      // The SDK script alone does not prove that the Key can load a map.
-      await new Promise((resolve, reject) => {
-        let settled = false;
-        const timeout = setTimeout(() => finish(new Error('底图未能加载，请确认 Key 已启用 JavaScript API，并允许当前网站域名。')), 15000);
-        const finish = error => {
-          if (settled) return;
-          settled = true;
-          clearTimeout(timeout);
-          this.map?.off('tilesloaded', loaded);
-          error ? reject(error) : resolve();
-        };
-        const loaded = () => finish();
-        this.map.on('tilesloaded', loaded);
-      });
-      if (this.destroyed || requestId !== this.requestId) throw new Error('地图加载已取消。');
-      this.provider = 'tencent';
+      this.syncOnlineMarkers();
+      if (this.userLocation) this.adapter.locate(this.userLocation, GPS_SVG);
+      if (this.viewIntent === 'fit') this.adapter.fitAll(this.stores, this.fitPadding);
+      else this.adapter.setCenter(this.center.lng, this.center.lat);
+      result.resource.layer.style.opacity = '1';
+      result.resource.layer.style.pointerEvents = 'auto';
       this.stage.hidden = true;
-      this.map.on('click', event => {
-        if (!event.latLng) return;
-        this.onCoordinate({ lng: event.latLng.getLng(), lat: event.latLng.getLat(), source: 'tencent' });
-      });
-      this.syncTencentMarkers();
-      this.syncTencentLocation();
       this.updateSelectionNote();
-      return { provider: 'tencent' };
-    } catch (error) {
+      this.onProviderChange(this.provider, { label: this.providerLabel, latencyMs: result.latencyMs });
+      return { provider: this.provider, label: this.providerLabel, latencyMs: result.latencyMs };
+    }).catch(error => {
       if (!this.destroyed && requestId === this.requestId) this.useOffline();
       throw error;
-    }
+    }).finally(() => {
+      if (this.loadingPromise === pending) this.loadingPromise = null;
+    });
+    this.loadingPromise = pending;
+    return pending;
   }
 
-  syncTencentMarkers() {
-    if (!this.map) return;
-    const T = window.TMap;
-    const geometries = this.stores.map(store => ({
-      id: String(store.id), styleId: `${safeStatus(store.status)}-${safeGrade(store.grade)}`,
-      position: new T.LatLng(Number(store.lat), Number(store.lng)),
-      properties: { storeId: store.id }
-    }));
-    if (this.markerLayer) { this.markerLayer.setGeometries(geometries); return; }
-    const styles = {};
-    for (const status of Object.keys(COLORS)) {
-      for (const grade of Object.keys(SYMBOLS)) {
-        styles[`${status}-${grade}`] = new T.MarkerStyle({
-          width: 36, height: 36, anchor: { x: 18, y: 18 },
-          src: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(pinSVG(status, grade))}`
-        });
-      }
-    }
-    this.markerLayer = new T.MultiMarker({ id: 'lishen-stores', map: this.map, styles, geometries });
-    this.markerLayer.on('click', event => {
-      const store = this.storeIndex.get(String(event.geometry?.id));
-      if (store) { this.selectStore(store.id); this.onSelect(store.id); }
-    });
-  }
-
-  syncTencentLocation() {
-    if (!this.map || !this.userLocation) return;
-    const T = window.TMap;
-    const geometries = [{ id: 'current-location', styleId: 'gps', position: new T.LatLng(this.userLocation.lat, this.userLocation.lng) }];
-    if (this.gpsLayer) { this.gpsLayer.setGeometries(geometries); return; }
-    this.gpsLayer = new T.MultiMarker({
-      id: 'lishen-current-location', map: this.map,
-      styles: { gps: new T.MarkerStyle({ width: 44, height: 44, anchor: { x: 22, y: 22 }, src: `data:image/svg+xml;charset=UTF-8,${encodeURIComponent(GPS_SVG)}` }) },
-      geometries
-    });
+  syncOnlineMarkers() {
+    this.adapter?.setStores(this.stores, this.selectedId, id => {
+      if (this.destroyed || !this.storeIndex.has(String(id))) return;
+      this.selectStore(id); this.onSelect(id);
+    }, pinSVG);
+    this.markerLayer = this.adapter?.markerLayer || null;
   }
 
   useOffline() {
-    if (this.markerLayer) { this.markerLayer.setMap(null); this.markerLayer = null; }
-    if (this.gpsLayer) { this.gpsLayer.setMap(null); this.gpsLayer = null; }
-    if (this.map) { this.map.destroy(); this.map = null; }
+    if (this.adapter) {
+      try { this.center = this.adapter.getCenter(); this.currentZoom = this.map?.getZoom?.() ?? this.currentZoom; } catch {}
+    }
+    this.requestId = (this.requestId || 0) + 1;
+    this.loadingController?.abort(); this.loadingController = null;
+    this.loadingPromise = null; this.configFingerprint = null;
+    this.onlineResource?.destroy(); this.onlineResource = null;
+    this.adapter = this.map = this.markerLayer = this.gpsLayer = null;
     this.online.replaceChildren();
     this.online.hidden = true;
     this.stage.hidden = false;
     this.provider = 'schematic';
+    this.providerLabel = providerLabel('schematic');
     this.render();
+    if (!this.destroyed) this.onProviderChange(this.provider, { label: this.providerLabel });
   }
 
   destroy() {
     this.destroyed = true;
-    this.requestId = (this.requestId || 0) + 1;
     this.events.abort();
     this.observer.disconnect();
-    if (this.markerLayer) this.markerLayer.setMap(null);
-    if (this.gpsLayer) this.gpsLayer.setMap(null);
-    if (this.map) this.map.destroy();
+    this.useOffline();
     this.root.remove();
-    this.map = this.markerLayer = this.gpsLayer = null;
   }
 }
